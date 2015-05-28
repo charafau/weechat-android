@@ -1,16 +1,11 @@
 package com.ubergeek42.WeechatAndroid.fragments;
 
-import java.util.ArrayList;
-import java.util.Vector;
-
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
 import android.app.Activity;
 import android.content.Context;
 import android.content.SharedPreferences;
 import android.os.Bundle;
 import android.preference.PreferenceManager;
+import android.support.v4.app.Fragment;
 import android.text.ClipboardManager;
 import android.text.Editable;
 import android.text.TextWatcher;
@@ -26,17 +21,16 @@ import android.view.View.OnClickListener;
 import android.view.View.OnKeyListener;
 import android.view.ViewGroup;
 import android.view.inputmethod.EditorInfo;
-import android.widget.EditText;
 import android.widget.AdapterView;
+import android.widget.EditText;
 import android.widget.ImageButton;
 import android.widget.ListView;
 import android.widget.TextView;
 import android.widget.Toast;
 
-import com.actionbarsherlock.app.SherlockFragment;
-import com.ubergeek42.WeechatAndroid.adapters.ChatLinesAdapter;
 import com.ubergeek42.WeechatAndroid.R;
 import com.ubergeek42.WeechatAndroid.WeechatActivity;
+import com.ubergeek42.WeechatAndroid.adapters.ChatLinesAdapter;
 import com.ubergeek42.WeechatAndroid.service.Buffer;
 import com.ubergeek42.WeechatAndroid.service.BufferEye;
 import com.ubergeek42.WeechatAndroid.service.RelayService;
@@ -44,11 +38,17 @@ import com.ubergeek42.WeechatAndroid.service.RelayServiceBinder;
 import com.ubergeek42.WeechatAndroid.utils.FixedRadialDrawable;
 import com.ubergeek42.weechat.relay.RelayConnectionHandler;
 
-public class BufferFragment extends SherlockFragment implements BufferEye, OnKeyListener,
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import java.util.ArrayList;
+import java.util.Vector;
+
+public class BufferFragment extends Fragment implements BufferEye, OnKeyListener,
         OnClickListener, TextWatcher, RelayConnectionHandler,
         TextView.OnEditorActionListener {
 
-    private static Logger logger = LoggerFactory.getLogger("BufferFragment");
+    public final static String LOCAL_PREF_FULL_NAME = "full_name";
     final private static boolean DEBUG_TAB_COMPLETE = false;
     final private static boolean DEBUG_LIFECYCLE = false;
     final private static boolean DEBUG_VISIBILITY = false;
@@ -60,9 +60,7 @@ public class BufferFragment extends SherlockFragment implements BufferEye, OnKey
     private final static String PREF_SHOW_SEND = "sendbtn_show";
     private final static String PREF_SHOW_TAB = "tabbtn_show";
     private final static String PREF_HOTLIST_SYNC = "hotlist_sync";
-
-    public final static String LOCAL_PREF_FULL_NAME = "full_name";
-
+    private static Logger logger = LoggerFactory.getLogger("BufferFragment");
     private WeechatActivity activity = null;
     private boolean started = false;
 
@@ -82,6 +80,26 @@ public class BufferFragment extends SherlockFragment implements BufferEye, OnKey
     ////////////////////////////////////////////////////////////////////////////////////////////////
     //////////////////////////////////////////////////////////////////////////////////////////////// life cycle
     ////////////////////////////////////////////////////////////////////////////////////////////////
+    private boolean pager_visible = false;
+    private boolean visible = false;
+    private boolean need_sync_read_marker = false;
+    private boolean need_move_read_marker = false;
+    /**
+     * these are the highlight and private counts that we are supposed to scroll
+     * * they are reset after the scroll has been completed
+     */
+    private int highlights = 0;
+    private int privates = 0;
+
+    ////////////////////////////////////////////////////////////////////////////////////////////////
+    //////////////////////////////////////////////////////////////////////////////////////////////// visibility (set by pager adapter)
+    ////////////////////////////////////////////////////////////////////////////////////////////////
+    private boolean tc_inprogress;
+    private Vector<String> tc_matches;
+    private int tc_index;
+    private int tc_wordstart;
+    private int tc_wordend;
+    private ArrayList<String> copy_list = null;
 
     @Override
     public void onAttach(Activity activity) {
@@ -98,6 +116,10 @@ public class BufferFragment extends SherlockFragment implements BufferEye, OnKey
         short_name = full_name = getArguments().getString(LOCAL_PREF_FULL_NAME);
         prefs = PreferenceManager.getDefaultSharedPreferences(activity.getBaseContext());
     }
+
+    ////////////////////////////////////////////////////////////////////////////////////////////////
+    //////////////////////////////////////////////////////////////////////////////////////////////// fake service connection
+    ////////////////////////////////////////////////////////////////////////////////////////////////
 
     @Override
     public View onCreateView(LayoutInflater inflater, ViewGroup container, Bundle savedInstanceState) {
@@ -133,6 +155,9 @@ public class BufferFragment extends SherlockFragment implements BufferEye, OnKey
         activity.bind(this);
     }
 
+
+    //////////////////////////////////////////////////////////////////////////////////////////////// RelayConnectionHandler stuff
+
     @Override
     public void onStop() {
         if (DEBUG_LIFECYCLE) logger.warn("{} onStop()", full_name);
@@ -150,24 +175,13 @@ public class BufferFragment extends SherlockFragment implements BufferEye, OnKey
         super.onDetach();
     }
 
-    ////////////////////////////////////////////////////////////////////////////////////////////////
-    //////////////////////////////////////////////////////////////////////////////////////////////// visibility (set by pager adapter)
-    ////////////////////////////////////////////////////////////////////////////////////////////////
-
-    private boolean pager_visible = false;
-    private boolean visible = false;
-    private boolean need_sync_read_marker = false;
-    private boolean need_move_read_marker = false;
-    /** these are the highlight and private counts that we are supposed to scroll
-     ** they are reset after the scroll has been completed */
-    private int highlights = 0;
-    private int privates = 0;
-
-    /** called when visibility of current fragment is (potentially) altered by
-     **   * drawer being shown/hidden
-     **   * whether buffer is shown in the pager (see MainPagerAdapter)
-     **   * availability of buffer & activity
-     **   * lifecycle (todo) */
+    /**
+     * called when visibility of current fragment is (potentially) altered by
+     * *   * drawer being shown/hidden
+     * *   * whether buffer is shown in the pager (see MainPagerAdapter)
+     * *   * availability of buffer & activity
+     * *   * lifecycle (todo)
+     */
     public void maybeChangeVisibilityState() {
         if (DEBUG_VISIBILITY) logger.warn("{} maybeChangeVisibilityState()", full_name);
         if (activity == null || buffer == null)
@@ -199,8 +213,10 @@ public class BufferFragment extends SherlockFragment implements BufferEye, OnKey
         }
     }
 
-    /** called by MainPagerAdapter
-     ** tells us that this page is visible, also used to lifecycle calls (must call super) */
+    /**
+     * called by MainPagerAdapter
+     * * tells us that this page is visible, also used to lifecycle calls (must call super)
+     */
     @Override
     public void setUserVisibleHint(boolean visible) {
         if (DEBUG_VISIBILITY) logger.warn("{} setUserVisibleHint({})", full_name, visible);
@@ -212,16 +228,12 @@ public class BufferFragment extends SherlockFragment implements BufferEye, OnKey
         }
 
         if (this.pager_visible == true &&   // we were visible
-                visible==false) {           // but now we aren't
+                visible == false) {           // but now we aren't
             need_move_read_marker = true;
         }
         this.pager_visible = visible;
         maybeChangeVisibilityState();
     }
-
-    ////////////////////////////////////////////////////////////////////////////////////////////////
-    //////////////////////////////////////////////////////////////////////////////////////////////// fake service connection
-    ////////////////////////////////////////////////////////////////////////////////////////////////
 
     public void onServiceConnected(RelayServiceBinder relay) {
         if (DEBUG_LIFECYCLE) logger.warn("{} onServiceConnected()", full_name);
@@ -238,14 +250,35 @@ public class BufferFragment extends SherlockFragment implements BufferEye, OnKey
         relay = null;
     }
 
+    @Override
+    public void onConnecting() {
+    }
 
-    //////////////////////////////////////////////////////////////////////////////////////////////// RelayConnectionHandler stuff
+    ////////////////////////////////////////////////////////////////////////////////////////////////
+    //////////////////////////////////////////////////////////////////////////////////////////////// the juice
+    ////////////////////////////////////////////////////////////////////////////////////////////////
 
-    @Override public void onConnecting() {}
-    @Override public void onConnect() {}
-    @Override public void onAuthenticated() {}
-    @Override public void onAuthenticationFailed() {}
-    @Override public void onError(String err, Object extraInfo) {}
+    @Override
+    public void onConnect() {
+    }
+
+    @Override
+    public void onAuthenticated() {
+    }
+
+    //////////////////////////////////////////////////////////////////////////////////////////////// ui
+
+    @Override
+    public void onAuthenticationFailed() {
+    }
+
+    ////////////////////////////////////////////////////////////////////////////////////////////////
+    //////////////////////////////////////////////////////////////////////////////////////////////// BufferEye stuff
+    ////////////////////////////////////////////////////////////////////////////////////////////////
+
+    @Override
+    public void onError(String err, Object extraInfo) {
+    }
 
     public void onBuffersListed() {
         if (DEBUG_CONNECTION) logger.warn("{} onBuffersListed()", full_name);
@@ -258,10 +291,6 @@ public class BufferFragment extends SherlockFragment implements BufferEye, OnKey
         if (DEBUG_CONNECTION) logger.warn("{} onDisconnect()", full_name);
         initUI(false);
     }
-
-    ////////////////////////////////////////////////////////////////////////////////////////////////
-    //////////////////////////////////////////////////////////////////////////////////////////////// the juice
-    ////////////////////////////////////////////////////////////////////////////////////////////////
 
     // there's relay now
     private void attachToBufferOrClose() {
@@ -296,17 +325,24 @@ public class BufferFragment extends SherlockFragment implements BufferEye, OnKey
         maybeChangeVisibilityState();
     }
 
+    ////////////////////////////////////////////////////////////////////////////////////////////////
+    //////////////////////////////////////////////////////////////////////////////////////////////// scrolling
+    ////////////////////////////////////////////////////////////////////////////////////////////////
+
     // no relay after dis :<
     // buffer might be null if we are closing fragment that is not connected
     private void detachFromBuffer() {
         if (DEBUG_LIFECYCLE) logger.warn("{} detachFromBuffer()", full_name);
         maybeChangeVisibilityState();
-        if (relay != null) relay.removeRelayConnectionHandler(this);        // remove connect / disconnect watcher
+        if (relay != null)
+            relay.removeRelayConnectionHandler(this);        // remove connect / disconnect watcher
         if (buffer != null) buffer.setBufferEye(null);                      // remove buffer watcher
         buffer = null;
     }
 
-    //////////////////////////////////////////////////////////////////////////////////////////////// ui
+    ////////////////////////////////////////////////////////////////////////////////////////////////
+    //////////////////////////////////////////////////////////////////////////////////////////////// keyboard / buttons
+    ////////////////////////////////////////////////////////////////////////////////////////////////
 
     public void initUI(final boolean online) {
         activity.runOnUiThread(new Runnable() {
@@ -324,10 +360,6 @@ public class BufferFragment extends SherlockFragment implements BufferEye, OnKey
         });
     }
 
-    ////////////////////////////////////////////////////////////////////////////////////////////////
-    //////////////////////////////////////////////////////////////////////////////////////////////// BufferEye stuff
-    ////////////////////////////////////////////////////////////////////////////////////////////////
-
     @Override
     public void onLinesChanged() {
         lines_adapter.onLinesChanged();
@@ -339,35 +371,41 @@ public class BufferFragment extends SherlockFragment implements BufferEye, OnKey
         scrollToHotLineIfNeeded();
     }
 
+    //////////////////////////////////////////////////////////////////////////////////////////////// send message
+
     @Override
     public void onPropertiesChanged() {
         lines_adapter.onPropertiesChanged();
     }
 
+    ////////////////////////////////////////////////////////////////////////////////////////////////
+    //////////////////////////////////////////////////////////////////////////////////////////////// tab completion
+    ////////////////////////////////////////////////////////////////////////////////////////////////
+
     @Override
     public void onBufferClosed() {
         if (DEBUG_CONNECTION) logger.warn("{} onBufferClosed()", full_name);
         activity.runOnUiThread(new Runnable() {
-            @Override public void run() {
+            @Override
+            public void run() {
                 activity.closeBuffer(full_name);
             }
         });
     }
 
-    ////////////////////////////////////////////////////////////////////////////////////////////////
-    //////////////////////////////////////////////////////////////////////////////////////////////// scrolling
-    ////////////////////////////////////////////////////////////////////////////////////////////////
-
-    /** scroll to the first hot line, if possible (that is, first unread line in a private buffer
-     **     or the first unread highlight)
-     ** can be called multiple times, will only run once
-     ** posts to the listview to make sure it's fully completed loading the items
-     **     after setting the adapter or updating lines */
+    /**
+     * scroll to the first hot line, if possible (that is, first unread line in a private buffer
+     * *     or the first unread highlight)
+     * * can be called multiple times, will only run once
+     * * posts to the listview to make sure it's fully completed loading the items
+     * *     after setting the adapter or updating lines
+     */
     public void scrollToHotLineIfNeeded() {
         if (DEBUG_AUTOSCROLLING) logger.error("{} scrollToHotLineIfNeeded()", short_name);
         if (buffer != null && visible && buffer.holds_all_lines && (highlights > 0 || privates > 0)) {
             ui_lines.post(new Runnable() {
-                @Override public void run() {
+                @Override
+                public void run() {
                     int count = lines_adapter.getCount(), idx = -2;
 
                     if (privates > 0) {
@@ -395,13 +433,11 @@ public class BufferFragment extends SherlockFragment implements BufferEye, OnKey
         }
     }
 
-    ////////////////////////////////////////////////////////////////////////////////////////////////
-    //////////////////////////////////////////////////////////////////////////////////////////////// keyboard / buttons
-    ////////////////////////////////////////////////////////////////////////////////////////////////
-
-    /** the only OnKeyListener's method
-     ** User pressed some key in the input box, check for what it was
-     ** NOTE: this only applies to HARDWARE buttons */
+    /**
+     * the only OnKeyListener's method
+     * * User pressed some key in the input box, check for what it was
+     * * NOTE: this only applies to HARDWARE buttons
+     */
     @Override
     public boolean onKey(View v, int keycode, KeyEvent event) {
         if (DEBUG_TAB_COMPLETE) logger.warn("{} onKey(..., {}, ...)", full_name, keycode);
@@ -433,8 +469,10 @@ public class BufferFragment extends SherlockFragment implements BufferEye, OnKey
         return false;
     }
 
-    /** the only OnClickListener's method
-     ** our own send button or tab button pressed */
+    /**
+     * the only OnClickListener's method
+     * * our own send button or tab button pressed
+     */
     @Override
     public void onClick(View v) {
         if (v.getId() == ui_send.getId())
@@ -443,8 +481,10 @@ public class BufferFragment extends SherlockFragment implements BufferEye, OnKey
             tryTabComplete();
     }
 
-    /** the only OnEditorActionListener's method
-     ** listens to keyboard's “send” press (NOT our button) */
+    /**
+     * the only OnEditorActionListener's method
+     * * listens to keyboard's “send” press (NOT our button)
+     */
     @Override
     public boolean onEditorAction(TextView textView, int actionId, KeyEvent keyEvent) {
         if (actionId == EditorInfo.IME_ACTION_SEND) {
@@ -454,9 +494,9 @@ public class BufferFragment extends SherlockFragment implements BufferEye, OnKey
         return false;
     }
 
-    //////////////////////////////////////////////////////////////////////////////////////////////// send message
-
-    /** sends the message if there's anything to send */
+    /**
+     * sends the message if there's anything to send
+     */
     private void sendMessage() {
         String[] input = ui_input.getText().toString().split("\n");
         for (String line : input) {
@@ -467,17 +507,11 @@ public class BufferFragment extends SherlockFragment implements BufferEye, OnKey
         ui_input.setText("");   // this will reset tab completion
     }
 
-    ////////////////////////////////////////////////////////////////////////////////////////////////
-    //////////////////////////////////////////////////////////////////////////////////////////////// tab completion
-    ////////////////////////////////////////////////////////////////////////////////////////////////
+    //////////////////////////////////////////////////////////////////////////////////////////////// text watcher
 
-    private boolean tc_inprogress;
-    private Vector<String> tc_matches;
-    private int tc_index;
-    private int tc_wordstart;
-    private int tc_wordend;
-    
-    /** attempts to perform tab completion on the current input */
+    /**
+     * attempts to perform tab completion on the current input
+     */
     private void tryTabComplete() {
         if (DEBUG_TAB_COMPLETE) logger.warn("tryTabComplete()");
         if (buffer == null) return;
@@ -530,29 +564,35 @@ public class BufferFragment extends SherlockFragment implements BufferEye, OnKey
         tc_inprogress = true;
     }
 
-    //////////////////////////////////////////////////////////////////////////////////////////////// text watcher
-
-    @Override public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
-    @Override public void onTextChanged(CharSequence s, int start, int before, int count) {}
-
-    /** invalidate tab completion progress on input box text change
-     ** tryTabComplete() will set it back if it modified the text causing this function to run */
     @Override
-    public void afterTextChanged(Editable s) {
-        if (DEBUG_TAB_COMPLETE) logger.warn("{} afterTextChanged(...)", full_name);
-        tc_inprogress = false;
+    public void beforeTextChanged(CharSequence s, int start, int count, int after) {
+    }
+
+    @Override
+    public void onTextChanged(CharSequence s, int start, int before, int count) {
     }
 
     ////////////////////////////////////////////////////////////////////////////////////////////////
     //////////////////////////////////////////////////////////////////////////////////////////////// context menu
     ////////////////////////////////////////////////////////////////////////////////////////////////
 
-    private ArrayList<String> copy_list = null;
+    /**
+     * invalidate tab completion progress on input box text change
+     * * tryTabComplete() will set it back if it modified the text causing this function to run
+     */
+    @Override
+    public void afterTextChanged(Editable s) {
+        if (DEBUG_TAB_COMPLETE) logger.warn("{} afterTextChanged(...)", full_name);
+        tc_inprogress = false;
+    }
 
-    /** This is related to the tap and hold menu that appears when clicking on a message
-     ** check for visibility is required because this is called for ALL fragments at once
-     ** see http://stackoverflow.com/questions/5297842/how-to-handle-oncontextitemselected-in-a-multi-fragment-activity */
-    @Override public boolean onContextItemSelected(MenuItem item) {
+    /**
+     * This is related to the tap and hold menu that appears when clicking on a message
+     * * check for visibility is required because this is called for ALL fragments at once
+     * * see http://stackoverflow.com/questions/5297842/how-to-handle-oncontextitemselected-in-a-multi-fragment-activity
+     */
+    @Override
+    public boolean onContextItemSelected(MenuItem item) {
         if (pager_visible && copy_list != null) {
             @SuppressWarnings("deprecation")
             ClipboardManager cm = (ClipboardManager) getActivity().getSystemService(Context.CLIPBOARD_SERVICE);
@@ -562,7 +602,8 @@ public class BufferFragment extends SherlockFragment implements BufferEye, OnKey
         return false;
     }
 
-    @Override public void onCreateContextMenu(ContextMenu menu, View v, ContextMenuInfo menuInfo) {
+    @Override
+    public void onCreateContextMenu(ContextMenu menu, View v, ContextMenuInfo menuInfo) {
         super.onCreateContextMenu(menu, v, menuInfo);
         if (!(v instanceof ListView)) return;
 
@@ -576,10 +617,10 @@ public class BufferFragment extends SherlockFragment implements BufferEye, OnKey
         String message = ((Buffer.Line) ui_textview.getTag()).getNotificationString();
         menu.add(0, Menu.FIRST, 0, message);
         copy_list.add(message);
-        
+
         // add urls
         int i = 1;
-        for (URLSpan url: ui_textview.getUrls()) {
+        for (URLSpan url : ui_textview.getUrls()) {
             menu.add(0, Menu.FIRST + i++, 1, url.getURL());
             copy_list.add(url.getURL());
         }

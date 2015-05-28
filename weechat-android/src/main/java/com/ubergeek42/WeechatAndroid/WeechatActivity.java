@@ -1,30 +1,21 @@
-/*******************************************************************************
+/**
+ * ****************************************************************************
  * Copyright 2012 Keith Johnson
- *
+ * <p>
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- *
- *   http://www.apache.org/licenses/LICENSE-2.0
- *
+ * <p>
+ * http://www.apache.org/licenses/LICENSE-2.0
+ * <p>
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
- ******************************************************************************/
+ * ****************************************************************************
+ */
 package com.ubergeek42.WeechatAndroid;
-
-import java.security.cert.CertPath;
-import java.security.cert.CertPathValidatorException;
-import java.security.cert.CertificateException;
-import java.security.cert.X509Certificate;
-import java.util.HashSet;
-
-import javax.net.ssl.SSLException;
-
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import android.app.AlertDialog;
 import android.content.ComponentName;
@@ -39,11 +30,16 @@ import android.os.IBinder;
 import android.preference.PreferenceManager;
 import android.support.annotation.NonNull;
 import android.support.annotation.Nullable;
-import android.support.v4.app.ActionBarDrawerToggle;
 import android.support.v4.app.FragmentManager;
+import android.support.v4.view.MenuItemCompat;
 import android.support.v4.view.ViewPager;
 import android.support.v4.widget.DrawerLayout;
+import android.support.v7.app.ActionBarDrawerToggle;
+import android.support.v7.app.AppCompatActivity;
 import android.view.LayoutInflater;
+import android.view.Menu;
+import android.view.MenuInflater;
+import android.view.MenuItem;
 import android.view.View;
 import android.view.View.OnClickListener;
 import android.view.inputmethod.InputMethodManager;
@@ -51,12 +47,6 @@ import android.widget.ImageView;
 import android.widget.TextView;
 import android.widget.Toast;
 
-import com.actionbarsherlock.ActionBarSherlock;
-import com.actionbarsherlock.app.ActionBar;
-import com.actionbarsherlock.app.SherlockFragmentActivity;
-import com.actionbarsherlock.view.Menu;
-import com.actionbarsherlock.view.MenuInflater;
-import com.actionbarsherlock.view.MenuItem;
 import com.ubergeek42.WeechatAndroid.adapters.MainPagerAdapter;
 import com.ubergeek42.WeechatAndroid.adapters.NickListAdapter;
 import com.ubergeek42.WeechatAndroid.fragments.BufferFragment;
@@ -68,10 +58,20 @@ import com.ubergeek42.WeechatAndroid.utils.MyMenuItemStuffListener;
 import com.ubergeek42.WeechatAndroid.utils.Utils;
 import com.ubergeek42.weechat.relay.RelayConnectionHandler;
 
-public class WeechatActivity extends SherlockFragmentActivity implements RelayConnectionHandler,
-        CutePagerTitleStrip.CutePageChangeListener, ActionBarSherlock.OnCreateOptionsMenuListener, ServiceConnection {
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
-    private static Logger logger = LoggerFactory.getLogger("WA");
+import java.security.cert.CertPath;
+import java.security.cert.CertPathValidatorException;
+import java.security.cert.CertificateException;
+import java.security.cert.X509Certificate;
+import java.util.HashSet;
+
+import javax.net.ssl.SSLException;
+
+public class WeechatActivity extends AppCompatActivity implements RelayConnectionHandler,
+        CutePagerTitleStrip.CutePageChangeListener, ServiceConnection {
+
     final private static boolean DEBUG = BuildConfig.DEBUG;
     final private static boolean DEBUG_OPTIONS_MENU = false;
     final private static boolean DEBUG_LIFECYCLE = false;
@@ -79,25 +79,38 @@ public class WeechatActivity extends SherlockFragmentActivity implements RelayCo
     final private static boolean DEBUG_INTENT = false;
     final private static boolean DEBUG_BUFFERS = false;
     final private static boolean DEBUG_DRAWER = false;
-
+    private static Logger logger = LoggerFactory.getLogger("WA");
+    //private String intent_buffer_full_name = null;
+    private final String EXTRA_NAME = "full_name";
     public RelayServiceBinder relay;
-    private Menu ui_menu;
+    //    private Menu ui_menu;
     private ViewPager ui_pager;
     private MainPagerAdapter adapter;
     private InputMethodManager imm;
     private CutePagerTitleStrip ui_strip;
-    
     private boolean slidy;
     private boolean drawer_enabled = true;
     private boolean drawer_showing = false;
     private DrawerLayout ui_drawer_layout = null;
     private View ui_drawer = null;
-    private ActionBarDrawerToggle drawer_toggle = null;
-    private @NonNull ImageView ui_info;
+    private ActionBarDrawerToggle drawer_toggle;
 
     ////////////////////////////////////////////////////////////////////////////////////////////////
     //////////////////////////////////////////////////////////////////////////////////////////////// life cycle
     ////////////////////////////////////////////////////////////////////////////////////////////////
+    private
+    @NonNull
+    ImageView ui_info;
+
+    ////////////////////////////////////////////////////////////////////////////////////////////////
+    private HashSet<BufferFragment> fragments = new HashSet<BufferFragment>();
+    volatile private int hot_number = 0;
+    private
+    @Nullable
+    TextView ui_hot = null;
+    private Menu ui_menu;
+
+    //////////////////////////////////////////////////////////////////////////////////////////////// these two are necessary for the drawer
 
     @Override
     public void onCreate(@Nullable Bundle savedInstanceState) {
@@ -117,7 +130,7 @@ public class WeechatActivity extends SherlockFragmentActivity implements RelayCo
         ui_pager.setAdapter(adapter);
 
         // prepare action bar
-        ActionBar ui_action_bar = getSupportActionBar();
+        final android.support.v7.app.ActionBar ui_action_bar = getSupportActionBar();
         ui_action_bar.setHomeButtonEnabled(true);
         ui_action_bar.setDisplayShowCustomEnabled(true);
         ui_action_bar.setDisplayShowTitleEnabled(false);
@@ -130,7 +143,7 @@ public class WeechatActivity extends SherlockFragmentActivity implements RelayCo
         // this is the text view behind the ui_pager
         // it says stuff like 'connecting', 'disconnected' et al
         ui_info = (ImageView) findViewById(R.id.info);
-        ui_info.setOnClickListener(new OnClickListener(){
+        ui_info.setOnClickListener(new OnClickListener() {
             @Override
             public void onClick(View v) {
                 if (relay.isConnection(RelayService.DISCONNECTED)) {
@@ -145,7 +158,7 @@ public class WeechatActivity extends SherlockFragmentActivity implements RelayCo
         if (slidy) {
             ui_drawer_layout = (DrawerLayout) findViewById(R.id.drawer_layout);
             ui_drawer = findViewById(R.id.bufferlist_fragment);
-            drawer_toggle = new ActionBarDrawerToggle(this, ui_drawer_layout, R.drawable.ic_drawer,
+            drawer_toggle = new ActionBarDrawerToggle(this, ui_drawer_layout,
                     R.string.open_drawer, R.string.close_drawer) {
 
                 @SuppressWarnings("SimplifiableConditionalExpression")
@@ -172,11 +185,11 @@ public class WeechatActivity extends SherlockFragmentActivity implements RelayCo
         updateCutePagerTitleStrip();
     }
 
-    ////////////////////////////////////////////////////////////////////////////////////////////////
-
-    /** bind to relay service, which results in:
-     **   onServiceConnected, which
-     **     adds relay connection handler */
+    /**
+     * bind to relay service, which results in:
+     * *   onServiceConnected, which
+     * *     adds relay connection handler
+     */
     // TODO: android.app.ServiceConnectionLeaked: Activity com.ubergeek42.WeechatAndroid.WeechatActivity
     // TODO: has leaked ServiceConnection com.ubergeek42.WeechatAndroid.WeechatActivity$1@424fdbe8 that was originally bound here
     // TODO: apparently onStop() sometimes doesn't get to unbind the service as onServiceConnected is called too late
@@ -188,8 +201,14 @@ public class WeechatActivity extends SherlockFragmentActivity implements RelayCo
         bindService(new Intent(this, RelayService.class), this, Context.BIND_AUTO_CREATE);
     }
 
-    /** remove relay connection handler and
-     ** unbind from service */
+    ////////////////////////////////////////////////////////////////////////////////////////////////
+    //////////////////////////////////////////////////////////////////////////////////////////////// relay connection
+    ////////////////////////////////////////////////////////////////////////////////////////////////
+
+    /**
+     * remove relay connection handler and
+     * * unbind from service
+     */
     @Override
     protected void onStop() {
         if (DEBUG_LIFECYCLE) logger.debug("onStop()");
@@ -208,25 +227,19 @@ public class WeechatActivity extends SherlockFragmentActivity implements RelayCo
         super.onDestroy();
     }
 
-    //////////////////////////////////////////////////////////////////////////////////////////////// these two are necessary for the drawer
-
     @Override
     protected void onPostCreate(Bundle savedInstanceState) {
         super.onPostCreate(savedInstanceState);
         if (slidy) drawer_toggle.syncState();
     }
 
+    //////////////////////////////////////////////////////////////////////////////////////////////// S E R V I C E
+
     @Override
     public void onConfigurationChanged(Configuration newConfig) {
         super.onConfigurationChanged(newConfig);
         if (slidy) drawer_toggle.onConfigurationChanged(newConfig);
     }
-
-    ////////////////////////////////////////////////////////////////////////////////////////////////
-    //////////////////////////////////////////////////////////////////////////////////////////////// relay connection
-    ////////////////////////////////////////////////////////////////////////////////////////////////
-
-    private HashSet<BufferFragment> fragments = new HashSet<BufferFragment>();
 
     synchronized public void bind(BufferFragment fragment) {
         fragments.add(fragment);
@@ -237,7 +250,7 @@ public class WeechatActivity extends SherlockFragmentActivity implements RelayCo
         fragments.remove(fragment);
     }
 
-    //////////////////////////////////////////////////////////////////////////////////////////////// S E R V I C E
+    //////////////////////////////////////////////////////////////////////////////////////////////// RelayConnectionHandler
 
     @Override
     synchronized public void onServiceConnected(ComponentName name, IBinder service) {
@@ -258,27 +271,29 @@ public class WeechatActivity extends SherlockFragmentActivity implements RelayCo
 
         updateHotCount(BufferList.getHotCount());
 
-        for (BufferFragment fragment: fragments)
+        for (BufferFragment fragment : fragments)
             fragment.onServiceConnected(relay);
     }
 
     @Override
     public void onServiceDisconnected(ComponentName name) {
         if (DEBUG_LIFECYCLE) logger.debug("onServiceDisconnected() <- should not happen!");
-        for (BufferFragment fragment: fragments)
+        for (BufferFragment fragment : fragments)
             fragment.onServiceDisconnected();
         relay = null;
     }
-
 
     private void adjustUI() {
         if (relay == null)
             return;
 
         // set image
-        if (relay.isConnection(RelayService.DISCONNECTED))      setInfoImage(R.drawable.ic_big_disconnected);
-        else if (relay.isConnection(RelayService.CONNECTING))   setInfoImage(R.drawable.ic_big_connecting);
-        else if (relay.isConnection(RelayService.CONNECTED))    setInfoImage(R.drawable.ic_big_connected);
+        if (relay.isConnection(RelayService.DISCONNECTED))
+            setInfoImage(R.drawable.ic_big_disconnected);
+        else if (relay.isConnection(RelayService.CONNECTING))
+            setInfoImage(R.drawable.ic_big_connecting);
+        else if (relay.isConnection(RelayService.CONNECTED))
+            setInfoImage(R.drawable.ic_big_connected);
 
         // enable/disable drawer
         if (slidy) {
@@ -290,62 +305,78 @@ public class WeechatActivity extends SherlockFragmentActivity implements RelayCo
         makeMenuReflectConnectionStatus();
     }
 
-    //////////////////////////////////////////////////////////////////////////////////////////////// RelayConnectionHandler
-
-    @Override public void onConnecting() {
+    @Override
+    public void onConnecting() {
         if (DEBUG_CONNECION) logger.debug("onConnecting()");
         adjustUI();
     }
 
-    /** creates and updates the hotlist
-     ** makes sure we update action bar menu after a connection change */
-    @Override public void onConnect() {
+    /**
+     * creates and updates the hotlist
+     * * makes sure we update action bar menu after a connection change
+     */
+    @Override
+    public void onConnect() {
         if (DEBUG_CONNECION) logger.debug("onConnect()");
         adjustUI();
     }
 
-    @Override public void onAuthenticated() {}
+    @Override
+    public void onAuthenticated() {
+    }
 
-    @Override public void onAuthenticationFailed() {
+    @Override
+    public void onAuthenticationFailed() {
         runOnUiThread(new Runnable() {
-            @Override public void run() {
+            @Override
+            public void run() {
                 Toast.makeText(getBaseContext(), getString(R.string.wrong_password), Toast.LENGTH_LONG).show();
             }
         });
     }
 
-    @Override public void onBuffersListed() {
+    ////////////////////////////////////////////////////////////////////////////////////////////////
+    //////////////////////////////////////////////////////////////////////////////////////////////// OnPageChangeListener
+    ////////////////////////////////////////////////////////////////////////////////////////////////
+
+    @Override
+    public void onBuffersListed() {
         if (DEBUG_CONNECION) logger.debug("onBuffersListed()");
         adjustUI();
         if (slidy) showDrawerIfPagerIsEmpty();
     }
 
-    /** makes sure we update action bar menu after a connection change */
-    @Override public void onDisconnect() {
+    /**
+     * makes sure we update action bar menu after a connection change
+     */
+    @Override
+    public void onDisconnect() {
         if (DEBUG_CONNECION) logger.debug("onDisconnect()");
         adjustUI();
     }
 
-    @Override public void onError(final String errorMsg, Object extraData) {
+    @Override
+    public void onError(final String errorMsg, Object extraData) {
         if (DEBUG_CONNECION) logger.debug("onError({}, ...)", errorMsg);
         runOnUiThread(new Runnable() {
-            @Override public void run() {
+            @Override
+            public void run() {
                 Toast.makeText(getBaseContext(), "Error: " + errorMsg, Toast.LENGTH_LONG).show();
             }
-        });        
+        });
         if (extraData instanceof SSLException && relay != null) {
             if (DEBUG) logger.error("...cause: {}", ((Throwable) extraData).getCause());
             SSLException e1 = (SSLException) extraData;
             if (e1.getCause() instanceof CertificateException) {
                 CertificateException e2 = (CertificateException) e1.getCause();
-                
+
                 if (e2.getCause() instanceof CertPathValidatorException) {
                     CertPathValidatorException e = (CertPathValidatorException) e2.getCause();
-                    CertPath cp = e.getCertPath();                    
-                    
+                    CertPath cp = e.getCertPath();
+
                     // Set the cert error on the backend
                     relay.setCertificateError((X509Certificate) cp.getCertificates().get(0));
-                    
+
                     // Start an activity to attempt establishing trust
                     Intent i = new Intent(this, SSLCertActivity.class);
                     startActivity(i);
@@ -354,38 +385,42 @@ public class WeechatActivity extends SherlockFragmentActivity implements RelayCo
         }
     }
 
-    ////////////////////////////////////////////////////////////////////////////////////////////////
-    //////////////////////////////////////////////////////////////////////////////////////////////// OnPageChangeListener
-    ////////////////////////////////////////////////////////////////////////////////////////////////
-
-    @Override public void onPageScrollStateChanged(int state) {}
-    @Override public void onPageScrolled(int position, float positionOffset, int positionOffsetPixels) {}
-
-    @Override public void onPageSelected(int position) {
-        hideSoftwareKeyboard();
-    }
-
-    @Override public void onChange() {
-        updateMenuItems();
-        hideSoftwareKeyboard();
+    @Override
+    public void onPageScrollStateChanged(int state) {
     }
 
     ////////////////////////////////////////////////////////////////////////////////////////////////
     //////////////////////////////////////////////////////////////////////////////////////////////// MENU
     ////////////////////////////////////////////////////////////////////////////////////////////////
 
-    volatile private int hot_number = 0;
-    private @Nullable TextView ui_hot = null;
+    @Override
+    public void onPageScrolled(int position, float positionOffset, int positionOffsetPixels) {
+    }
 
-    /** update hot count (that red square over the bell icon) at any time
-     ** also sets "hot_number" in case menu has to be recreated
-     ** can be called off the main thread */
+    @Override
+    public void onPageSelected(int position) {
+        hideSoftwareKeyboard();
+    }
+
+    @Override
+    public void onChange() {
+        updateMenuItems();
+        hideSoftwareKeyboard();
+    }
+
+    /**
+     * update hot count (that red square over the bell icon) at any time
+     * * also sets "hot_number" in case menu has to be recreated
+     * * can be called off the main thread
+     */
     public void updateHotCount(final int new_hot_number) {
-        if (DEBUG_OPTIONS_MENU) logger.debug("updateHotCount(), hot: {} -> {}", hot_number, new_hot_number);
+        if (DEBUG_OPTIONS_MENU)
+            logger.debug("updateHotCount(), hot: {} -> {}", hot_number, new_hot_number);
         hot_number = new_hot_number;
         if (ui_hot != null)
             ui_hot.post(new Runnable() {
-                @Override public void run() {
+                @Override
+                public void run() {
                     if (new_hot_number == 0)
                         ui_hot.setVisibility(View.INVISIBLE);
                     else {
@@ -396,8 +431,10 @@ public class WeechatActivity extends SherlockFragmentActivity implements RelayCo
             });
     }
 
-    /** hide or show nicklist/close menu item according to buffer
-     ** MUST be called on main thread */
+    /**
+     * hide or show nicklist/close menu item according to buffer
+     * * MUST be called on main thread
+     */
     private void updateMenuItems() {
         if (ui_menu == null) return;
         boolean buffer_visible = adapter.getCount() > 0;
@@ -405,17 +442,21 @@ public class WeechatActivity extends SherlockFragmentActivity implements RelayCo
         ui_menu.findItem(R.id.menu_close).setVisible(buffer_visible);
     }
 
-    /** Can safely hold on to this according to docs
-     ** http://developer.android.com/reference/android/app/Activity.html#onCreateOptionsMenu(android.view.Menu) **/
+    /**
+     * Can safely hold on to this according to docs
+     * * http://developer.android.com/reference/android/app/Activity.html#onCreateOptionsMenu(android.view.Menu) *
+     */
     @Override
     public boolean onCreateOptionsMenu(final Menu menu) {
         if (DEBUG_OPTIONS_MENU) logger.debug("onCreateOptionsMenu(...)");
-        MenuInflater menuInflater = getSupportMenuInflater();
+        final MenuInflater menuInflater = getMenuInflater();
         menuInflater.inflate(R.menu.menu_actionbar, menu);
-        final View menu_hotlist = menu.findItem(R.id.menu_hotlist).getActionView();
-        ui_hot = (TextView) menu_hotlist.findViewById(R.id.hotlist_hot);
+        final MenuItem menu_hotlist = menu.findItem(R.id.menu_hotlist);
+        final View menuHotListView = MenuItemCompat.getActionView(menu_hotlist);
+        ui_hot = (TextView) menuHotListView.findViewById(R.id.hotlist_hot);
+
         updateHotCount(hot_number);
-        new MyMenuItemStuffListener(menu_hotlist, "Show hot message") {
+        new MyMenuItemStuffListener(menuHotListView, "Show hot message") {
             @Override
             public void onClick(View v) {
                 onHotlistSelected();
@@ -426,7 +467,9 @@ public class WeechatActivity extends SherlockFragmentActivity implements RelayCo
         return super.onCreateOptionsMenu(menu);
     }
 
-    /** handle the options when the user presses the menu button */
+    /**
+     * handle the options when the user presses the menu button
+     */
     @Override
     public boolean onOptionsItemSelected(MenuItem item) {
         if (DEBUG_OPTIONS_MENU) logger.debug("onOptionsItemSelected({})", item);
@@ -507,7 +550,13 @@ public class WeechatActivity extends SherlockFragmentActivity implements RelayCo
             Toast.makeText(this, getString(R.string.no_hot_buffers), Toast.LENGTH_SHORT).show();
     }
 
-    /** change first menu item from connect to disconnect or back depending on connection status */
+    ////////////////////////////////////////////////////////////////////////////////////////////////
+    //////////////////////////////////////////////////////////////////////////////////////////////// MISC
+    ////////////////////////////////////////////////////////////////////////////////////////////////
+
+    /**
+     * change first menu item from connect to disconnect or back depending on connection status
+     */
     private void makeMenuReflectConnectionStatus() {
         if (DEBUG_OPTIONS_MENU) logger.debug("makeMenuReflectConnectionStatus()");
         runOnUiThread(new Runnable() {
@@ -515,23 +564,23 @@ public class WeechatActivity extends SherlockFragmentActivity implements RelayCo
             public void run() {
                 if (WeechatActivity.this.ui_menu != null) {
                     MenuItem connectionStatus = WeechatActivity.this.ui_menu.findItem(R.id.menu_connection_state);
-                    if (relay != null && (relay.isConnection(RelayService.CONNECTED)))
+                    if (relay != null && (relay.isConnection(RelayService.CONNECTED))) {
                         connectionStatus.setTitle(R.string.disconnect);
-                    else
+                    } else {
                         connectionStatus.setTitle(R.string.connect);
+                    }
 
-                    ((ImageView) ui_menu.findItem(R.id.menu_hotlist).getActionView().findViewById(R.id.hotlist_bell))
-                            .setImageResource(BufferList.OPTIMIZE_TRAFFIC ? R.drawable.ic_bell_cracked : R.drawable.ic_bell);
+                    final MenuItem item = ui_menu.findItem(R.id.menu_hotlist);
+                    item.setIcon(BufferList.OPTIMIZE_TRAFFIC ? R.drawable.ic_bell_cracked : R.drawable.ic_bell);
+
                 }
             }
         });
     }
 
-    ////////////////////////////////////////////////////////////////////////////////////////////////
-    //////////////////////////////////////////////////////////////////////////////////////////////// MISC
-    ////////////////////////////////////////////////////////////////////////////////////////////////
-
-    /** open a buffer WITHOUT hiding the drawer and checking if we are connected */
+    /**
+     * open a buffer WITHOUT hiding the drawer and checking if we are connected
+     */
     public void openBufferSilently(@NonNull String full_name) {
         if (DEBUG_BUFFERS) logger.debug("openBufferSilently({})", full_name);
         adapter.openBuffer(full_name, false);
@@ -554,7 +603,9 @@ public class WeechatActivity extends SherlockFragmentActivity implements RelayCo
         if (slidy) showDrawerIfPagerIsEmpty();
     }
 
-    /** hides the software keyboard, if any */
+    /**
+     * hides the software keyboard, if any
+     */
     public void hideSoftwareKeyboard() {
         imm.hideSoftInputFromWindow(ui_pager.getWindowToken(), 0);
     }
@@ -566,15 +617,17 @@ public class WeechatActivity extends SherlockFragmentActivity implements RelayCo
         else super.onBackPressed();
     }
 
-    /** called if the text of one of the buffers has been changed
-     ** and the ui_strip doesn't update itself because there's no scrolling */
-    public void updateCutePagerTitleStrip() {
-        ui_strip.updateText();
-    }
-
     ////////////////////////////////////////////////////////////////////////////////////////////////
     //////////////////////////////////////////////////////////////////////////////////////////////// drawer stuff
     ////////////////////////////////////////////////////////////////////////////////////////////////
+
+    /**
+     * called if the text of one of the buffers has been changed
+     * * and the ui_strip doesn't update itself because there's no scrolling
+     */
+    public void updateCutePagerTitleStrip() {
+        ui_strip.updateText();
+    }
 
     public void drawerVisibilityChanged(boolean showing) {
         if (DEBUG_DRAWER) logger.debug("drawerVisibilityChanged({})", showing);
@@ -593,7 +646,8 @@ public class WeechatActivity extends SherlockFragmentActivity implements RelayCo
         if (DEBUG_DRAWER) logger.debug("enableDrawer()");
         drawer_enabled = true;
         ui_pager.post(new Runnable() {
-            @Override public void run() {
+            @Override
+            public void run() {
                 ui_drawer_layout.setDrawerLockMode(DrawerLayout.LOCK_MODE_UNLOCKED);
             }
         });
@@ -603,7 +657,8 @@ public class WeechatActivity extends SherlockFragmentActivity implements RelayCo
         if (DEBUG_DRAWER) logger.debug("disableDrawer()");
         drawer_enabled = false;
         ui_pager.post(new Runnable() {
-            @Override public void run() {
+            @Override
+            public void run() {
                 ui_drawer_layout.setDrawerLockMode(DrawerLayout.LOCK_MODE_LOCKED_CLOSED);
             }
         });
@@ -611,7 +666,8 @@ public class WeechatActivity extends SherlockFragmentActivity implements RelayCo
 
     public void showDrawer() {
         if (DEBUG_DRAWER) logger.debug("showDrawer()");
-        if (!drawer_showing) drawerVisibilityChanged(true); // we need this so that drawer_showing is set immediately
+        if (!drawer_showing)
+            drawerVisibilityChanged(true); // we need this so that drawer_showing is set immediately
         ui_pager.post(new Runnable() {
             @Override
             public void run() {
@@ -630,40 +686,47 @@ public class WeechatActivity extends SherlockFragmentActivity implements RelayCo
         });
     }
 
-    /** pop up drawer if connected & no pages in the adapter **/
+    /**
+     * pop up drawer if connected & no pages in the adapter *
+     */
     public void showDrawerIfPagerIsEmpty() {
         if (DEBUG_DRAWER) logger.debug("showDrawerIfPagerIsEmpty()");
         if (!drawer_showing)
             ui_pager.post(new Runnable() {
-                @Override public void run() {
+                @Override
+                public void run() {
                     if (relay != null && relay.isConnection(RelayService.BUFFERS_LISTED) && adapter.getCount() == 0)
                         showDrawer();
                 }
             });
     }
 
-    /** set image that appears in the pager when no pages are open */
+    ////////////////////////////////////////////////////////////////////////////////////////////////
+    //////////////////////////////////////////////////////////////////////////////////////////////// intent
+    ////////////////////////////////////////////////////////////////////////////////////////////////
+
+    /**
+     * set image that appears in the pager when no pages are open
+     */
     private void setInfoImage(final int id) {
         final Drawable d = getResources().getDrawable(id);
         ui_info.post(new Runnable() {
-            @Override public void run() {
+            @Override
+            public void run() {
                 Utils.setImageDrawableWithFade(ui_info, d, 350);
             }
         });
     }
 
-    ////////////////////////////////////////////////////////////////////////////////////////////////
-    //////////////////////////////////////////////////////////////////////////////////////////////// intent
-    ////////////////////////////////////////////////////////////////////////////////////////////////
-
-    //private String intent_buffer_full_name = null;
-    private final String EXTRA_NAME = "full_name";
-
-    /** we may get intent while we are connected to the service and when we are not.
-     ** empty (but present) full_name means open the drawer (in case we have highlights
-     ** on multiple buffers */
-    @Override protected void onNewIntent(Intent intent) {
-        if (DEBUG_INTENT) logger.debug("onNewIntent(...), full_name='{}'", intent.getStringExtra(EXTRA_NAME));
+    /**
+     * we may get intent while we are connected to the service and when we are not.
+     * * empty (but present) full_name means open the drawer (in case we have highlights
+     * * on multiple buffers
+     */
+    @Override
+    protected void onNewIntent(Intent intent) {
+        if (DEBUG_INTENT)
+            logger.debug("onNewIntent(...), full_name='{}'", intent.getStringExtra(EXTRA_NAME));
         super.onNewIntent(intent);
         if (intent.hasExtra(EXTRA_NAME)) {
             setIntent(intent);
@@ -671,7 +734,9 @@ public class WeechatActivity extends SherlockFragmentActivity implements RelayCo
         }
     }
 
-    /** the extra must be non-null */
+    /**
+     * the extra must be non-null
+     */
     private void openBufferFromIntent() {
         if (DEBUG_INTENT) logger.debug("openBufferFromIntent()");
         String name = getIntent().getStringExtra(EXTRA_NAME);
